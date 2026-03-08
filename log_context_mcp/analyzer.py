@@ -16,9 +16,9 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from preprocessor import PreprocessorResult, Severity
+from log_context_mcp.preprocessor import PreprocessorResult, Severity
 
-# Will use httpx for async Anthropic API calls
+# Will use httpx for async API calls
 try:
     import httpx
     HAS_HTTPX = True
@@ -26,8 +26,6 @@ except ImportError:
     HAS_HTTPX = False
 
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 1024
 
 ANALYSIS_SYSTEM_PROMPT = """\
@@ -64,6 +62,138 @@ Respond ONLY with valid JSON, no markdown fences, no preamble. Schema:
   "noise_assessment": "string — brief note on how much of the log is noise vs signal"
 }
 """
+
+
+class _AnthropicBackend:
+    """Backend for Anthropic's native API."""
+
+    def __init__(self, api_key: str, model: str):
+        self.api_key = api_key
+        self.model = model
+
+    async def call(self, system_prompt: str, user_prompt: str) -> str:
+        """Make a request to Anthropic API and return the text response."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": MAX_TOKENS,
+                    "system": system_prompt,
+                    "messages": [
+                        {"role": "user", "content": user_prompt}
+                    ],
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Extract text from response
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+        return text
+
+
+class _OpenAICompatibleBackend:
+    """Backend for OpenAI-compatible APIs (OpenAI, Ollama, Groq, Together, etc.)."""
+
+    def __init__(self, api_key: Optional[str], model: str, base_url: str):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url
+
+    async def call(self, system_prompt: str, user_prompt: str) -> str:
+        """Make a request to OpenAI-compatible API and return the text response."""
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Extract text from response
+        return data["choices"][0]["message"]["content"]
+
+
+async def _resolve_backend() -> Optional[tuple]:
+    """
+    Resolve which LLM backend to use based on env vars.
+
+    Returns (backend_instance, model_name) or None if no backend is available.
+
+    Selection order:
+    1. LOG_CONTEXT_BACKEND env var if set (anthropic/openai/ollama)
+    2. ANTHROPIC_API_KEY → use Anthropic native backend
+    3. OPENAI_API_KEY → use OpenAI-compatible backend
+    4. Ollama at http://localhost:11434 → use OpenAI-compatible backend
+    5. None found → return None
+    """
+    explicit_backend = os.environ.get("LOG_CONTEXT_BACKEND", "").lower()
+
+    if explicit_backend == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+        model = os.environ.get("LOG_CONTEXT_MODEL", "claude-haiku-4-5-20251001")
+        return _AnthropicBackend(api_key, model), model
+
+    elif explicit_backend == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        model = os.environ.get("LOG_CONTEXT_MODEL", "gpt-4o-mini")
+        return _OpenAICompatibleBackend(api_key, model, base_url), model
+
+    elif explicit_backend == "ollama":
+        model = os.environ.get("LOG_CONTEXT_MODEL", "llama3")
+        base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
+        return _OpenAICompatibleBackend(None, model, base_url), model
+
+    # Auto-detect
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        model = os.environ.get("LOG_CONTEXT_MODEL", "claude-haiku-4-5-20251001")
+        return _AnthropicBackend(api_key, model), model
+
+    if os.environ.get("OPENAI_API_KEY"):
+        api_key = os.environ.get("OPENAI_API_KEY")
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        model = os.environ.get("LOG_CONTEXT_MODEL", "gpt-4o-mini")
+        return _OpenAICompatibleBackend(api_key, model, base_url), model
+
+    # Try Ollama at localhost
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get("http://localhost:11434/api/version")
+            if response.status_code == 200:
+                model = os.environ.get("LOG_CONTEXT_MODEL", "llama3")
+                return _OpenAICompatibleBackend(None, model, "http://localhost:11434/v1"), model
+    except Exception:
+        pass
+
+    return None
 
 
 @dataclass
@@ -151,50 +281,38 @@ def _build_analysis_prompt(result: PreprocessorResult) -> str:
 
 async def analyze(result: PreprocessorResult, api_key: Optional[str] = None) -> Optional[SemanticAnalysis]:
     """
-    Call the Haiku model to semantically analyze preprocessed log data.
+    Call an LLM to semantically analyze preprocessed log data.
 
     Returns None if:
     - httpx is not installed
-    - No API key is available
+    - No backend is available
     - The API call fails
 
     The MCP server should fall back to deterministic-only mode in these cases.
+
+    Args:
+        result: Preprocessed log data
+        api_key: Optional Anthropic API key (for backward compatibility).
+                 If provided, Anthropic backend is used directly.
     """
     if not HAS_HTTPX:
         return None
 
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
+    # If api_key is provided, use Anthropic backend directly (backward compatibility)
+    if api_key:
+        model = os.environ.get("LOG_CONTEXT_MODEL", "claude-haiku-4-5-20251001")
+        backend = _AnthropicBackend(api_key, model)
+    else:
+        # Resolve backend from env vars
+        backend_result = await _resolve_backend()
+        if backend_result is None:
+            return None
+        backend, _model = backend_result
 
     prompt = _build_analysis_prompt(result)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                ANTHROPIC_API_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                },
-                json={
-                    "model": DEFAULT_MODEL,
-                    "max_tokens": MAX_TOKENS,
-                    "system": ANALYSIS_SYSTEM_PROMPT,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        # Extract text from response
-        text = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text += block.get("text", "")
+        text = await backend.call(ANALYSIS_SYSTEM_PROMPT, prompt)
 
         # Parse JSON
         text = text.strip().removeprefix("```json").removesuffix("```").strip()

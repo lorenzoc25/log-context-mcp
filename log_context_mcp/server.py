@@ -30,8 +30,8 @@ from enum import Enum
 
 from mcp.server.fastmcp import FastMCP
 
-from preprocessor import preprocess, PreprocessorResult, Severity
-from analyzer import analyze, SemanticAnalysis
+from log_context_mcp.preprocessor import preprocess, PreprocessorResult, Severity
+from log_context_mcp.analyzer import analyze, SemanticAnalysis
 
 
 # ---------------------------------------------------------------------------

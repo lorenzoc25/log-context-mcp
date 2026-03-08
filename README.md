@@ -25,7 +25,7 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 ### Architecture
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
+┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Raw Log     │────▶│  Layer 1:        │────▶│  Layer 2:       │
 │  (5000 lines)│     │  Deterministic   │     │  Semantic       │
 │              │     │  - Dedup         │     │  - Haiku LLM    │
@@ -33,16 +33,16 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 │              │     │  - Stack traces  │     │  - Root cause   │
 │              │     │  - Noise removal │     │  - Timeline     │
 │              │     │  (FREE)          │     │  (CHEAP)        │
-└─────────────┘     └──────────────────┘     └────────┬────────┘
+└──────────────┘     └──────────────────┘     └────────┬────────┘
                                                        │
                                                        ▼
-                                             ┌─────────────────┐
+                                             ┌──────────────────┐
                                              │  Summary         │
                                              │  (~1000 tokens)  │
                                              │                  │
                                              │  + drill-down    │
                                              │    on demand     │
-                                             └─────────────────┘
+                                             └──────────────────┘
 ```
 
 **Layer 1 (Deterministic, zero cost):**
@@ -55,7 +55,7 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 - Typically achieves 50-70% reduction alone
 
 **Layer 2 (Semantic, cheap):**
-- Calls Claude Haiku (~$0.001 per analysis)
+- Calls Claude Haiku or Equivalent (~$0.001 per analysis)
 - Classifies ambiguous errors into categories
 - Extracts root cause in 1-2 sentences
 - Builds timeline of state changes
@@ -78,7 +78,16 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 
 ```bash
 cd log-context-mcp
+
+# Create and activate virtual environment (recommended)
+python3.11 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# For development (including tests)
+pip install -e ".[dev]"
 ```
 
 ### Register with Claude Code
@@ -89,13 +98,63 @@ claude mcp add log-context -- python /path/to/log-context-mcp/server.py
 
 ### (Optional) Enable Semantic Analysis
 
-Set your Anthropic API key for Layer 2:
+Layer 2 (semantic analysis) supports multiple LLM backends with auto-detection:
 
 ```bash
+# Option 1: Anthropic (Claude)
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# Option 2: OpenAI or compatible provider (Groq, Together, etc.)
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, default shown
+
+# Option 3: Local Ollama
+# (auto-detected at http://localhost:11434 if running)
+ollama run llama3  # or any other model
+
+# Option 4: Explicit backend selection
+export LOG_CONTEXT_BACKEND=anthropic  # or openai, ollama
+export LOG_CONTEXT_MODEL=claude-opus-4-20250514  # override default model
 ```
 
-Without this, the server runs in deterministic-only mode (Layer 1 only), which is still very useful.
+Without any API key, the server runs in deterministic-only mode (Layer 1 only), which is still very useful.
+
+### Project Structure
+
+```
+log-context-mcp/
+├── log_context_mcp/          # Main package
+│   ├── __init__.py
+│   ├── server.py             # MCP server & tool definitions
+│   ├── preprocessor.py       # Layer 1: Deterministic processing
+│   └── analyzer.py           # Layer 2: Semantic analysis
+├── tests/                    # Test suite
+│   ├── __init__.py
+│   └── test_log_context.py  # Comprehensive test coverage
+├── pyproject.toml            # Project metadata & pytest config
+└── README.md                 # This file
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+python3.11 -m pytest tests/
+
+# Run with verbose output
+python3.11 -m pytest tests/ -v
+
+# Run with coverage report
+python3.11 -m pytest tests/ --cov=log_context_mcp --cov-report=term-missing
+```
+
+Tests cover:
+- **Layer 1 (deterministic)**: 35 tests covering ANSI stripping, severity detection, deduplication, stack traces, etc.
+- **Layer 2 (prompt generation)**: 4 tests for prompt structure and formatting
+- **Backend resolution**: 13 tests for auto-detection and explicit backend selection
+- **Backend implementations**: 4 tests for API request formatting
+
+All tests run **without external API keys** — mocked where needed.
 
 ## Usage
 
