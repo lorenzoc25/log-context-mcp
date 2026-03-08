@@ -21,17 +21,15 @@ Then in Claude Code:
 """
 
 import json
-import re
-import sys
 import os
+import re
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
-from enum import Enum
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
-from log_context_mcp.preprocessor import preprocess, PreprocessorResult, Severity
-from log_context_mcp.analyzer import analyze, SemanticAnalysis
+from log_context_mcp.analyzer import SemanticAnalysis, analyze
+from log_context_mcp.preprocessor import Severity, preprocess
 
 
 # ---------------------------------------------------------------------------
@@ -55,22 +53,32 @@ class LogIngestInput(BaseModel):
     log_text: Optional[str] = Field(
         default=None,
         description=(
-            "Raw log text to analyze. Provide EITHER log_text OR file_path, not both. "
-            "For large logs, prefer file_path to avoid bloating the context."
+            "Raw log text to analyze. Provide EITHER log_text OR file_path, "
+            "not both. For large logs, prefer file_path to avoid bloating the "
+            "context."
         ),
     )
     file_path: Optional[str] = Field(
         default=None,
-        description="Path to a log file on disk. The server reads it directly — no need to cat the file into the prompt.",
+        description=(
+            "Path to a log file on disk. The server reads it directly — "
+            "no need to cat the file into the prompt."
+        ),
     )
     label: str = Field(
         default="default",
-        description="Session label to reference this log later (e.g., 'build_log', 'crash_dump'). Default: 'default'.",
+        description=(
+            "Session label to reference this log later "
+            "(e.g., 'build_log', 'crash_dump'). Default: 'default'."
+        ),
         max_length=64,
     )
     enable_semantic: bool = Field(
         default=True,
-        description="Whether to run the semantic analysis (Layer 2) via Haiku. Set to false for faster, deterministic-only analysis.",
+        description=(
+            "Whether to run the semantic analysis (Layer 2) via Haiku. "
+            "Set to false for faster, deterministic-only analysis."
+        ),
     )
 
 
@@ -164,7 +172,7 @@ async def log_ingest(params: LogIngestInput) -> str:
         if not os.path.isfile(path):
             return f"Error: File not found: {path}. Check the path and try again."
         try:
-            with open(path, "r", errors="replace") as f:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
                 raw_text = f.read()
         except PermissionError:
             return f"Error: Permission denied reading {path}."
@@ -205,9 +213,14 @@ async def log_ingest(params: LogIngestInput) -> str:
                 "Showing deterministic analysis only.*"
             )
 
-    parts.append(f"\n---")
-    parts.append(f"💡 **Drill down**: Use `log_get_lines` with pattern/severity filters to see specific raw lines.")
-    parts.append(f"📋 **Session**: `{params.label}` ({result.total_lines} lines stored)")
+    parts.append("\n---")
+    parts.append(
+        "💡 **Drill down**: Use `log_get_lines` with pattern/severity filters "
+        "to see specific raw lines."
+    )
+    parts.append(
+        f"📋 **Session**: `{params.label}` ({result.total_lines} lines stored)"
+    )
 
     return "\n".join(parts)
 
@@ -238,10 +251,11 @@ async def log_get_lines(params: LogGetLinesInput) -> str:
     session = _sessions.get(params.label)
     if not session:
         available = list(_sessions.keys()) if _sessions else ["(none)"]
+        available_str = ", ".join(available)
         return (
             f"Error: No log session found with label '{params.label}'. "
-            f"Available sessions: {', '.join(available)}. "
-            f"Run `log_ingest` first."
+            f"Available sessions: {available_str}. "
+            "Run `log_ingest` first."
         )
 
     raw_lines = session["raw_lines"]
@@ -289,7 +303,7 @@ async def log_get_lines(params: LogGetLinesInput) -> str:
         return (
             f"No lines matched the filters (pattern={params.pattern!r}, "
             f"severity={params.severity!r}). Try broader filters."
-        )
+        )  # pylint: disable=line-too-long
 
     output_lines = [f"  {num:>6} | {line}" for num, line in matches]
     total_matching = len(matches)
@@ -324,7 +338,9 @@ async def log_get_analysis(params: LogGetAnalysisInput) -> str:
     """
     session = _sessions.get(params.label)
     if not session:
-        return f"Error: No session '{params.label}'. Run `log_ingest` first."
+        return (
+            f"Error: No session '{params.label}'. Run `log_ingest` first."
+        )
 
     semantic = session.get("semantic")
     if not semantic:
@@ -363,11 +379,14 @@ async def log_list_sessions(params: LogListSessionsInput) -> str:
     for label, session in _sessions.items():
         result = session["result"]
         has_semantic = "✓" if session.get("semantic") else "✗"
-        errors = result.severity_counts.get("error", 0) + result.severity_counts.get("fatal", 0)
+        error_count = (
+            result.severity_counts.get("error", 0)
+            + result.severity_counts.get("fatal", 0)
+        )
         lines.append(
             f"- **{label}**: {result.total_lines} lines, "
             f"{result.unique_lines} unique, "
-            f"{errors} errors, "
+            f"{error_count} errors, "
             f"semantic={has_semantic}"
         )
 

@@ -13,6 +13,7 @@ but produces much better summaries with it enabled.
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional
 
@@ -158,7 +159,7 @@ async def _resolve_backend() -> Optional[tuple]:
         model = os.environ.get("LOG_CONTEXT_MODEL", "claude-haiku-4-5-20251001")
         return _AnthropicBackend(api_key, model), model
 
-    elif explicit_backend == "openai":
+    if explicit_backend == "openai":
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             return None
@@ -166,7 +167,7 @@ async def _resolve_backend() -> Optional[tuple]:
         model = os.environ.get("LOG_CONTEXT_MODEL", "gpt-4o-mini")
         return _OpenAICompatibleBackend(api_key, model, base_url), model
 
-    elif explicit_backend == "ollama":
+    if explicit_backend == "ollama":
         model = os.environ.get("LOG_CONTEXT_MODEL", "llama3")
         base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
         return _OpenAICompatibleBackend(None, model, base_url), model
@@ -189,8 +190,10 @@ async def _resolve_backend() -> Optional[tuple]:
             response = await client.get("http://localhost:11434/api/version")
             if response.status_code == 200:
                 model = os.environ.get("LOG_CONTEXT_MODEL", "llama3")
-                return _OpenAICompatibleBackend(None, model, "http://localhost:11434/v1"), model
-    except Exception:
+                url = "http://localhost:11434/v1"
+                return _OpenAICompatibleBackend(None, model, url), model
+    except Exception:  # pylint: disable=broad-except
+        # Ollama is optional, silently skip if not available
         pass
 
     return None
@@ -210,26 +213,28 @@ class SemanticAnalysis:
     def to_summary(self) -> str:
         """Format as a concise text summary for the main agent."""
         parts = []
-        parts.append(f"### Semantic Analysis")
+        parts.append("### Semantic Analysis")
         parts.append(f"**Primary Issue**: {self.primary_issue}")
         parts.append(f"**Root Cause**: {self.root_cause}")
 
         if self.error_signatures:
-            parts.append(f"\n**Error Signatures**:")
+            parts.append("\n**Error Signatures**:")
             for sig in self.error_signatures:
                 component = sig.get("affected_component", "unknown")
                 category = sig.get("category", "unknown")
                 count = sig.get("count", 1)
-                parts.append(f"- `{sig['pattern']}` [{category}] in {component} (×{count})")
+                parts.append(
+                    f"- `{sig['pattern']}` [{category}] in {component} (×{count})"
+                )
 
         if self.timeline:
-            parts.append(f"\n**Timeline**:")
+            parts.append("\n**Timeline**:")
             for event in self.timeline:
                 ts = event.get("timestamp", "?")
                 parts.append(f"- [{ts}] {event['event']}")
 
         if self.attention_needed:
-            parts.append(f"\n**Needs Attention**:")
+            parts.append("\n**Needs Attention**:")
             for item in self.attention_needed:
                 parts.append(f"- ⚠️ {item}")
 
@@ -279,7 +284,9 @@ def _build_analysis_prompt(result: PreprocessorResult) -> str:
     return "\n".join(parts)
 
 
-async def analyze(result: PreprocessorResult, api_key: Optional[str] = None) -> Optional[SemanticAnalysis]:
+async def analyze(
+    result: PreprocessorResult, api_key: Optional[str] = None
+) -> Optional[SemanticAnalysis]:
     """
     Call an LLM to semantically analyze preprocessed log data.
 
@@ -328,8 +335,7 @@ async def analyze(result: PreprocessorResult, api_key: Optional[str] = None) -> 
             raw_json=parsed,
         )
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-except
         # Log to stderr, don't crash — the deterministic layer still works
-        import sys
         print(f"[log_context] Semantic analysis failed: {e}", file=sys.stderr)
         return None

@@ -7,22 +7,21 @@ Covers:
 - Backend resolution logic (env var mocking)
 """
 
-import json
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from log_context_mcp.preprocessor import (
     Severity,
-    LogLine,
-    StackTrace,
     PreprocessorResult,
-    preprocess,
-    strip_ansi,
+    StackTrace,
     detect_severity,
     extract_timestamp,
     is_noise,
     is_stack_trace_line,
+    preprocess,
+    strip_ansi,
 )
 from log_context_mcp.analyzer import (
     _build_analysis_prompt,
@@ -230,7 +229,10 @@ class TestFullPreprocessing:
 
     def test_uuid_normalization(self):
         """Deduplicate lines differing only in UUID."""
-        text = "Request a1b2c3d4-e5f6-4789-0123-456789abcdef completed\nRequest f9e8d7c6-b5a4-3210-fedc-ba9876543210 completed"
+        text = (
+            "Request a1b2c3d4-e5f6-4789-0123-456789abcdef completed\n"
+            "Request f9e8d7c6-b5a4-3210-fedc-ba9876543210 completed"
+        )
         result = preprocess(text)
         # Should be deduplicated
         assert result.unique_lines == 1
@@ -415,7 +417,7 @@ class TestBackendResolution:
         }):
             result = await _resolve_backend()
             assert result is not None
-            backend, model = result
+            backend, _model = result
             assert isinstance(backend, _AnthropicBackend)
 
     @pytest.mark.asyncio
@@ -428,7 +430,7 @@ class TestBackendResolution:
         }):
             result = await _resolve_backend()
             assert result is not None
-            backend, model = result
+            backend, _model = result
             assert isinstance(backend, _OpenAICompatibleBackend)
 
     @pytest.mark.asyncio
@@ -455,7 +457,7 @@ class TestBackendResolution:
         }):
             result = await _resolve_backend()
             assert result is not None
-            backend, model = result
+            backend, _model = result
             assert backend.base_url == "https://custom.example.com/v1"
 
     @pytest.mark.asyncio
@@ -585,7 +587,7 @@ class TestOpenAICompatibleBackend:
             mock_instance.post = AsyncMock(return_value=mock_response)
             mock_client.return_value = mock_instance
 
-            result = await backend.call("system", "user prompt")
+            _ = await backend.call("system", "user prompt")
 
             call_args = mock_instance.post.call_args
             assert "Authorization" not in call_args[1]["headers"]
