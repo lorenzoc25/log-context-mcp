@@ -65,7 +65,7 @@ Respond ONLY with valid JSON, no markdown fences, no preamble. Schema:
 """
 
 
-class _AnthropicBackend:
+class _AnthropicBackend:  # pylint: disable=too-few-public-methods
     """Backend for Anthropic's native API."""
 
     def __init__(self, api_key: str, model: str):
@@ -102,7 +102,7 @@ class _AnthropicBackend:
         return text
 
 
-class _OpenAICompatibleBackend:
+class _OpenAICompatibleBackend:  # pylint: disable=too-few-public-methods
     """Backend for OpenAI-compatible APIs (OpenAI, Ollama, Groq, Together, etc.)."""
 
     def __init__(self, api_key: Optional[str], model: str, base_url: str):
@@ -137,7 +137,7 @@ class _OpenAICompatibleBackend:
         return data["choices"][0]["message"]["content"]
 
 
-async def _resolve_backend() -> Optional[tuple]:
+async def _resolve_backend() -> Optional[tuple]:  # pylint: disable=too-many-return-statements
     """
     Resolve which LLM backend to use based on env vars.
 

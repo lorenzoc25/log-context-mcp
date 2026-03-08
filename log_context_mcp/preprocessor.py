@@ -109,7 +109,7 @@ class StackTrace:
 
 
 @dataclass
-class PreprocessorResult:
+class PreprocessorResult:  # pylint: disable=too-many-instance-attributes
     """Output of the deterministic preprocessing pass."""
     total_lines: int
     unique_lines: int
@@ -123,6 +123,7 @@ class PreprocessorResult:
 
     @property
     def reduction_pct(self) -> float:
+        """Percentage of lines removed by deduplication."""
         if self.total_lines == 0:
             return 0.0
         return round((1 - self.unique_lines / self.total_lines) * 100, 1)
@@ -229,7 +230,9 @@ def is_stack_trace_line(line: str) -> bool:
     return False
 
 
-def preprocess(raw_text: str) -> PreprocessorResult:
+def preprocess(  # pylint: disable=too-many-locals,too-many-branches
+    raw_text: str,
+) -> PreprocessorResult:
     """
     Run the full deterministic preprocessing pipeline on raw log text.
     Returns a PreprocessorResult with deduplicated lines, grouped stack traces,

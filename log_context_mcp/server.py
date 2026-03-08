@@ -29,7 +29,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field
 
 from log_context_mcp.analyzer import SemanticAnalysis, analyze
-from log_context_mcp.preprocessor import Severity, preprocess
+from log_context_mcp.preprocessor import detect_severity, preprocess, strip_ansi
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ async def log_ingest(params: LogIngestInput) -> str:
                 raw_text = f.read()
         except PermissionError:
             return f"Error: Permission denied reading {path}."
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             return f"Error reading file: {e}"
     else:
         return "Error: Provide either `log_text` or `file_path`. Neither was given."
@@ -235,7 +235,9 @@ async def log_ingest(params: LogIngestInput) -> str:
         "openWorldHint": False,
     },
 )
-async def log_get_lines(params: LogGetLinesInput) -> str:
+async def log_get_lines(  # pylint: disable=too-many-locals,too-many-branches
+    params: LogGetLinesInput,
+) -> str:
     """Retrieve specific raw lines from a previously ingested log.
 
     Use this after `log_ingest` to drill into specific errors, patterns, or
@@ -276,7 +278,6 @@ async def log_get_lines(params: LogGetLinesInput) -> str:
 
     # Filter by pattern and/or severity
     matches = []
-    result = session["result"]
 
     for i, line in enumerate(raw_lines):
         if params.pattern:
@@ -289,7 +290,6 @@ async def log_get_lines(params: LogGetLinesInput) -> str:
                     continue
 
         if params.severity:
-            from preprocessor import detect_severity, strip_ansi
             cleaned = strip_ansi(line)
             sev = detect_severity(cleaned)
             if sev.value != params.severity.lower():
@@ -363,7 +363,7 @@ async def log_get_analysis(params: LogGetAnalysisInput) -> str:
         "openWorldHint": False,
     },
 )
-async def log_list_sessions(params: LogListSessionsInput) -> str:
+async def log_list_sessions(params: LogListSessionsInput) -> str:  # pylint: disable=unused-argument
     """List all active log sessions with basic stats.
 
     Args:
