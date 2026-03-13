@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "log-context-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Token-efficient log preprocessing MCP server for LLM coding agents"
 readme = "README.md"
 license = "MIT"
