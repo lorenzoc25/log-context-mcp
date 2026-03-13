@@ -94,40 +94,76 @@ fi
 claude mcp add log-context $MCP_ENV_ARGS -- $CMD
 
 echo
-# Install global CLAUDE.md instruction (makes log_ingest trigger automatically)
-GLOBAL_MD="$HOME/.claude/CLAUDE.md"
-LOG_INSTRUCTION="$(cat <<'INSTRUCTION'
+# --- CLAUDE.md auto-trigger ---
+echo "Add log analysis instructions to ~/.claude/CLAUDE.md?"
+echo "  This makes Claude automatically use log_ingest whenever it sees a log file"
+echo "  — no need to say 'use log_ingest' manually."
+echo
+read -r -p "Update ~/.claude/CLAUDE.md? [Y/n]: " CLAUDE_MD_CHOICE
+CLAUDE_MD_CHOICE="${CLAUDE_MD_CHOICE:-Y}"
+
+if [[ "$CLAUDE_MD_CHOICE" =~ ^[Yy] ]]; then
+  GLOBAL_MD="$HOME/.claude/CLAUDE.md"
+  LOG_INSTRUCTION="$(cat <<'INSTRUCTION'
 
 ## Log Analysis
 
-When you need to analyze log files or log output, **always use the \`log_ingest\` MCP tool** instead of reading the file directly. This applies to any \`.log\` file, build output, crash dumps, or error traces. Call \`log_ingest\` with \`file_path=\` and \`enable_semantic=false\`, then analyze the preprocessed summary yourself. Use \`log_get_lines\` to drill into specific patterns.
+When you need to analyze log files or log output, **always use the `log_ingest` MCP tool** instead of reading the file directly. This applies to any `.log` file, build output, crash dumps, or error traces. Call `log_ingest` with `file_path=` and `enable_semantic=false`, then analyze the preprocessed summary yourself. Use `log_get_lines` to drill into specific patterns.
 INSTRUCTION
 )"
-
-if [ -f "$GLOBAL_MD" ]; then
-  if ! grep -q "log_ingest" "$GLOBAL_MD"; then
-    echo "$LOG_INSTRUCTION" >> "$GLOBAL_MD"
-    echo "Updated ~/.claude/CLAUDE.md with log analysis instructions"
+  if [ -f "$GLOBAL_MD" ]; then
+    if ! grep -q "log_ingest" "$GLOBAL_MD"; then
+      echo "$LOG_INSTRUCTION" >> "$GLOBAL_MD"
+      echo "  ✓ Updated ~/.claude/CLAUDE.md"
+    else
+      echo "  ~/.claude/CLAUDE.md already has log analysis instructions — skipped"
+    fi
   else
-    echo "~/.claude/CLAUDE.md already has log analysis instructions"
+    mkdir -p "$HOME/.claude"
+    printf "# Global Claude Code Instructions%s" "$LOG_INSTRUCTION" > "$GLOBAL_MD"
+    echo "  ✓ Created ~/.claude/CLAUDE.md"
   fi
 else
-  mkdir -p "$HOME/.claude"
-  echo "# Global Claude Code Instructions$LOG_INSTRUCTION" > "$GLOBAL_MD"
-  echo "Created ~/.claude/CLAUDE.md"
+  echo "  Skipped."
 fi
 
-# Install skill (works for Claude Code subscribers with no API key)
-SKILL_DIR="$HOME/.claude/commands"
-mkdir -p "$SKILL_DIR"
-SKILL_SRC="$(dirname "$0")/../skills/analyze-log.md"
-if [ -f "$SKILL_SRC" ]; then
-  cp "$SKILL_SRC" "$SKILL_DIR/analyze-log.md"
-  echo "Skill installed: /analyze-log"
+echo
+# --- /analyze-log skill ---
+echo "Install the /analyze-log skill?"
+echo "  Lets Claude Code subscribers run semantic analysis using their existing"
+echo "  subscription — no separate API key needed."
+echo
+read -r -p "Install /analyze-log skill? [Y/n]: " SKILL_CHOICE
+SKILL_CHOICE="${SKILL_CHOICE:-Y}"
+
+if [[ "$SKILL_CHOICE" =~ ^[Yy] ]]; then
+  SKILL_DIR="$HOME/.claude/commands"
+  AGENT_DIR="$HOME/.claude/agents"
+  mkdir -p "$SKILL_DIR" "$AGENT_DIR"
+  REPO_ROOT="$(dirname "$0")/.."
+
+  # Install skill
+  if [ -f "$REPO_ROOT/skills/analyze-log.md" ]; then
+    cp "$REPO_ROOT/skills/analyze-log.md" "$SKILL_DIR/analyze-log.md"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/lorenzoc25/log-context-mcp/main/skills/analyze-log.md" \
+      -o "$SKILL_DIR/analyze-log.md"
+  fi
+  echo "  ✓ Skill installed: /analyze-log"
+
+  # Install log-analyzer agent (runs on Haiku)
+  if [ -f "$REPO_ROOT/.claude/agents/log-analyzer.md" ]; then
+    cp "$REPO_ROOT/.claude/agents/log-analyzer.md" "$AGENT_DIR/log-analyzer.md"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/lorenzoc25/log-context-mcp/main/.claude/agents/log-analyzer.md" \
+      -o "$AGENT_DIR/log-analyzer.md"
+  fi
+  echo "  ✓ Agent installed: log-analyzer (Haiku)"
+else
+  echo "  Skipped."
 fi
 
 echo
 echo "Done! Restart Claude Code, then try:"
-echo "  /analyze-log /path/to/your.log"
-echo
-echo "  (or without the skill: Use log_ingest with file_path=\"/path/to/your.log\")"
+echo "  'look at /path/to/your.log'   — Claude will call log_ingest automatically"
+echo "  /analyze-log /path/to/your.log — explicit skill invocation"

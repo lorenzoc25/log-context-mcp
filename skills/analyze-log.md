@@ -7,23 +7,15 @@ Analyze a log file or log text using the log-context MCP server.
    - If the user pasted log text, use `log_text`
    - Use a descriptive `label` (e.g. `build_log`, `crash_dump`)
 
-2. **Analyze the preprocessed summary** — from the Layer 1 output, identify:
-   - **Primary issue**: what went wrong in one sentence
-   - **Root cause**: the underlying reason (not just symptoms)
-   - **Error timeline**: sequence of events that led to the failure
-   - **Blast radius**: what services/components were affected
-   - **Action items**: concrete next steps to investigate or fix
+2. **Spin up the `log-analyzer` sub-agent** (runs on Haiku) using the Agent tool, passing the full `log_ingest` output as the prompt.
 
-3. **Drill down if needed** — use `log_get_lines` to fetch raw lines for:
-   - The first occurrence of the primary error
-   - Any stack traces referenced in the summary
-   - Lines immediately before the first error (to find the trigger)
+3. **Drill down if needed** — use `log_get_lines` to fetch raw lines for stack traces or patterns the sub-agent flagged.
 
-4. **Report findings** concisely — lead with the root cause, not the symptom list.
+4. **Report findings** back to the user, leading with root cause.
 
 ## Notes
 
-- Prefer `file_path` over pasting large logs as `log_text` to avoid bloating context
+- The `log-analyzer` agent runs on Haiku — cheap and fast for this task
+- Layer 1 compression means the agent only sees ~1000 tokens regardless of original log size
+- Prefer `file_path` over `log_text` for large logs
 - Use `log_list_sessions` if the user references a previously ingested log
-- Layer 1 alone (no external API) is sufficient — do not set `enable_semantic=true`
-- If the log is ambiguous, ask the user what system/service it is from before analyzing
