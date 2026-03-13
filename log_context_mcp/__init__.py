@@ -7,4 +7,4 @@ A three-layer approach to log analysis:
 - Layer 3: Drill-down on demand (specific line retrieval with context)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

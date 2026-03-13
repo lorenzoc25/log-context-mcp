@@ -94,5 +94,40 @@ fi
 claude mcp add log-context $MCP_ENV_ARGS -- $CMD
 
 echo
+# Install global CLAUDE.md instruction (makes log_ingest trigger automatically)
+GLOBAL_MD="$HOME/.claude/CLAUDE.md"
+LOG_INSTRUCTION="$(cat <<'INSTRUCTION'
+
+## Log Analysis
+
+When you need to analyze log files or log output, **always use the \`log_ingest\` MCP tool** instead of reading the file directly. This applies to any \`.log\` file, build output, crash dumps, or error traces. Call \`log_ingest\` with \`file_path=\` and \`enable_semantic=false\`, then analyze the preprocessed summary yourself. Use \`log_get_lines\` to drill into specific patterns.
+INSTRUCTION
+)"
+
+if [ -f "$GLOBAL_MD" ]; then
+  if ! grep -q "log_ingest" "$GLOBAL_MD"; then
+    echo "$LOG_INSTRUCTION" >> "$GLOBAL_MD"
+    echo "Updated ~/.claude/CLAUDE.md with log analysis instructions"
+  else
+    echo "~/.claude/CLAUDE.md already has log analysis instructions"
+  fi
+else
+  mkdir -p "$HOME/.claude"
+  echo "# Global Claude Code Instructions$LOG_INSTRUCTION" > "$GLOBAL_MD"
+  echo "Created ~/.claude/CLAUDE.md"
+fi
+
+# Install skill (works for Claude Code subscribers with no API key)
+SKILL_DIR="$HOME/.claude/commands"
+mkdir -p "$SKILL_DIR"
+SKILL_SRC="$(dirname "$0")/../skills/analyze-log.md"
+if [ -f "$SKILL_SRC" ]; then
+  cp "$SKILL_SRC" "$SKILL_DIR/analyze-log.md"
+  echo "Skill installed: /analyze-log"
+fi
+
+echo
 echo "Done! Restart Claude Code, then try:"
-echo "  Use log_ingest with file_path=\"/path/to/your.log\""
+echo "  /analyze-log /path/to/your.log"
+echo
+echo "  (or without the skill: Use log_ingest with file_path=\"/path/to/your.log\")"

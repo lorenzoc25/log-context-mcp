@@ -181,6 +181,40 @@ All tests run without external API keys.
 
 ## Usage
 
+### Automatic triggering (no manual invocation needed)
+
+The setup script adds an instruction to `~/.claude/CLAUDE.md` that tells Claude Code to automatically reach for `log_ingest` whenever it encounters a log file — no `/analyze-log` or explicit "use log_ingest" needed.
+
+To install manually:
+```bash
+cat >> ~/.claude/CLAUDE.md << 'EOF'
+
+## Log Analysis
+When analyzing log files or log output, always use the `log_ingest` MCP tool instead of reading the file directly. Call `log_ingest` with `file_path=` and `enable_semantic=false`, then analyze the preprocessed summary yourself. Use `log_get_lines` to drill into specific patterns.
+EOF
+```
+
+After this, simply saying "look at /tmp/error.log" is enough — Claude will call `log_ingest` automatically.
+
+### No API key? Use the `/analyze-log` skill
+
+If you're a Claude Code subscriber without a separate API key, install the skill instead of configuring Layer 2. It uses Layer 1 for preprocessing and your existing Claude subscription for semantic analysis — no extra credentials needed.
+
+```bash
+# Copy the skill to Claude Code's commands directory
+mkdir -p ~/.claude/commands
+cp skills/analyze-log.md ~/.claude/commands/analyze-log.md
+```
+
+Then in Claude Code:
+```
+/analyze-log /path/to/your.log
+```
+
+The skill calls `log_ingest` with Layer 1 only, then has Claude analyze the condensed output. Since Layer 1 reduces logs by 50-95% before Claude sees them, you get full semantic analysis at a fraction of the token cost.
+
+### MCP tools directly
+
 Once registered, use these tools in Claude Code:
 
 ### `log_ingest` — Analyze a log file
