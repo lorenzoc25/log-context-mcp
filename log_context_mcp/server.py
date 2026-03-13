@@ -206,12 +206,12 @@ async def log_ingest(params: LogIngestInput) -> str:
 
     if semantic:
         parts.append("\n" + semantic.to_summary())
-    else:
-        if params.enable_semantic:
-            parts.append(
-                "\n*Semantic analysis unavailable (no ANTHROPIC_API_KEY or httpx not installed). "
-                "Showing deterministic analysis only.*"
-            )
+    elif params.enable_semantic:
+        parts.append(
+            "\n*Semantic analysis unavailable. "
+            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or run Ollama locally. "
+            "Showing deterministic analysis only.*"
+        )
 
     parts.append("\n---")
     parts.append(
@@ -397,5 +397,10 @@ async def log_list_sessions(params: LogListSessionsInput) -> str:  # pylint: dis
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the MCP server."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

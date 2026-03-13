@@ -25,10 +25,10 @@ ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # Broad severity patterns (case-insensitive) covering most log frameworks
 SEVERITY_PATTERNS = [
-    (re.compile(r"\b(FATAL|CRITICAL|CRIT)\b", re.I), "fatal"),
+    (re.compile(r"\b(FATAL|CRITICAL|CRIT|EMERG|ALERT)\b", re.I), "fatal"),
     (re.compile(r"\b(ERROR|ERR)\b", re.I), "error"),
     (re.compile(r"\b(WARN(?:ING)?)\b", re.I), "warning"),
-    (re.compile(r"\b(INFO)\b", re.I), "info"),
+    (re.compile(r"\b(INFO|NOTICE)\b", re.I), "info"),
     (re.compile(r"\b(DEBUG|TRACE|VERBOSE)\b", re.I), "debug"),
 ]
 
@@ -45,6 +45,14 @@ STACK_TRACE_INDICATORS = [
     re.compile(r"^\s+\^+"),              # Caret error indicators
 ]
 
+# Matches bare exception/error lines at the start of a line.
+# Heuristic: starts with a PascalCase identifier followed by a colon,
+# with no leading whitespace (e.g. "TimeoutError: ...", "RuntimeError: ...",
+# "java.lang.NullPointerException: ...", "panic: ...").
+_EXCEPTION_LINE_RE = re.compile(
+    r"^(?:[a-z]+\.)*[A-Z]\w*(?:[:,]\s|\s*$)"
+)
+
 # Lines that are pure noise
 NOISE_PATTERNS = [
     re.compile(r"^\s*$"),                            # blank
@@ -55,9 +63,10 @@ NOISE_PATTERNS = [
 
 # Timestamp extraction (ISO-8601, common log formats)
 TIMESTAMP_PATTERNS = [
-    re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"),
-    re.compile(r"\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}"),
-    re.compile(r"\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"),
+    re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"),           # ISO-8601
+    re.compile(r"\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}"),              # nginx/CLF
+    re.compile(r"\[?\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}\]?"),  # Apache
+    re.compile(r"\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"),              # syslog
 ]
 
 
@@ -171,7 +180,7 @@ class PreprocessorResult:  # pylint: disable=too-many-instance-attributes
             for line, count, sev in error_warn[:max_dedup_lines]:
                 prefix = f"[{sev.value.upper()}]"
                 suffix = f" (×{count})" if count > 1 else ""
-                parts.append(f"- {prefix} {line}{suffix}")
+                parts.append(f"- {prefix} {_clean_for_display(line)}{suffix}")
 
         # High-frequency info/debug (only if repeated many times)
         high_freq = [
@@ -183,7 +192,7 @@ class PreprocessorResult:  # pylint: disable=too-many-instance-attributes
         if high_freq:
             parts.append("\n### High-Frequency Lines (≥5 occurrences)")
             for line, count, sev in high_freq[:20]:
-                parts.append(f"- [{sev.value.upper()}] {line} (×{count})")
+                parts.append(f"- [{sev.value.upper()}] {_clean_for_display(line)} (×{count})")
 
         return "\n".join(parts)
 
@@ -230,51 +239,47 @@ def is_stack_trace_line(line: str) -> bool:
     return False
 
 
-def preprocess(  # pylint: disable=too-many-locals,too-many-branches
-    raw_text: str,
-) -> PreprocessorResult:
-    """
-    Run the full deterministic preprocessing pipeline on raw log text.
-    Returns a PreprocessorResult with deduplicated lines, grouped stack traces,
-    and summary statistics.
-    """
-    lines = raw_text.splitlines()
-    total = len(lines)
-
-    # Phase 1: Clean and classify each line
+def _classify_lines(raw_lines: list[str]) -> tuple[list[LogLine], int]:
+    """Phase 1: Clean, classify, and filter noise from raw log lines."""
     processed: list[LogLine] = []
     noise_count = 0
-
-    for i, raw_line in enumerate(lines):
+    for i, raw_line in enumerate(raw_lines):
         cleaned = strip_ansi(raw_line).rstrip()
         if is_noise(cleaned):
             noise_count += 1
             continue
-        severity = detect_severity(cleaned)
-        timestamp = extract_timestamp(cleaned)
-        is_st = is_stack_trace_line(cleaned)
         processed.append(LogLine(
             raw=raw_line,
             cleaned=cleaned,
-            severity=severity,
-            timestamp=timestamp,
+            severity=detect_severity(cleaned),
+            timestamp=extract_timestamp(cleaned),
             line_number=i + 1,
-            is_stack_trace=is_st,
+            is_stack_trace=is_stack_trace_line(cleaned),
         ))
+    return processed, noise_count
 
-    # Phase 2: Group stack traces
+
+def _group_stack_traces(processed: list[LogLine]) -> list[StackTrace]:
+    """Phase 2: Group consecutive stack trace lines into StackTrace objects."""
     stack_traces: list[StackTrace] = []
     current_trace: Optional[StackTrace] = None
 
     for ll in processed:
         if ll.is_stack_trace:
             if current_trace is None:
-                # Look back: the previous non-stack line is the header
                 current_trace = StackTrace(header_line=ll.line_number)
             current_trace.lines.append(ll.cleaned)
-        else:
-            if current_trace is not None:
-                # Check if this line is the final error message of the trace
+        elif current_trace is not None:
+            if ll.cleaned and ll.cleaned[0] in (" ", "\t"):
+                # Indented code context line within the trace
+                current_trace.lines.append(ll.cleaned)
+            elif _EXCEPTION_LINE_RE.match(ll.cleaned):
+                # Bare exception line e.g. "TimeoutError: No connections..."
+                current_trace.lines.append(ll.cleaned)
+                stack_traces.append(current_trace)
+                current_trace = None
+            else:
+                # Non-indented, non-exception line — trace ended
                 if ll.severity in (Severity.ERROR, Severity.FATAL):
                     current_trace.lines.append(ll.cleaned)
                     current_trace.severity = ll.severity
@@ -283,23 +288,20 @@ def preprocess(  # pylint: disable=too-many-locals,too-many-branches
 
     if current_trace is not None:
         stack_traces.append(current_trace)
+    return stack_traces
 
-    # Phase 3: Deduplicate non-stack-trace lines
-    # Key insight: log lines often differ only in their timestamp.
-    # We normalize out timestamps before comparing for deduplication,
-    # but keep the first raw occurrence for display.
+
+def _deduplicate(processed: list[LogLine]) -> list[tuple[str, int, "Severity"]]:
+    """Phase 3: Deduplicate non-stack-trace lines, normalizing timestamps."""
     line_counter: Counter = Counter()
     line_severity: dict[str, Severity] = {}
     seen_order: OrderedDict = OrderedDict()
-    # Map from normalized key -> first raw occurrence
     norm_to_raw: dict[str, str] = {}
 
     for ll in processed:
         if not ll.is_stack_trace:
-            # Normalize: strip timestamps for dedup comparison
             norm_key = _normalize_for_dedup(ll.cleaned)
             line_counter[norm_key] += 1
-            # Keep the most severe classification
             existing = line_severity.get(norm_key, Severity.UNKNOWN)
             if _severity_rank(ll.severity) > _severity_rank(existing):
                 line_severity[norm_key] = ll.severity
@@ -307,15 +309,29 @@ def preprocess(  # pylint: disable=too-many-locals,too-many-branches
                 seen_order[norm_key] = True
                 norm_to_raw[norm_key] = ll.cleaned
 
-    deduplicated = [
+    return [
         (norm_to_raw[key], line_counter[key], line_severity.get(key, Severity.UNKNOWN))
         for key in seen_order
     ]
 
-    # Phase 4: Collect timestamps
+
+def preprocess(raw_text: str) -> PreprocessorResult:
+    """
+    Run the full deterministic preprocessing pipeline on raw log text.
+    Returns a PreprocessorResult with deduplicated lines, grouped stack traces,
+    and summary statistics.
+    """
+    raw_lines = raw_text.splitlines()
+    total = len(raw_lines)
+
+    processed, noise_count = _classify_lines(raw_lines)
+    stack_traces = _group_stack_traces(processed)
+    deduplicated = _deduplicate(processed)
+
+    # Collect timestamps
     timestamps = [ll.timestamp for ll in processed if ll.timestamp]
 
-    # Phase 5: Severity counts
+    # Severity counts
     sev_counts: dict[str, int] = {}
     for ll in processed:
         sev_counts[ll.severity.value] = sev_counts.get(ll.severity.value, 0) + 1
@@ -354,6 +370,25 @@ def _normalize_for_dedup(line: str) -> str:
     # Only normalize numbers that look like IDs (standalone numbers > 3 digits)
     result = re.sub(r"\b\d{4,}\b", "<NUM>", result)
     return result
+
+
+_SEVERITY_WORD_RE = re.compile(
+    r"\[?\s*\b(FATAL|CRITICAL|CRIT|ALERT|EMERG|NOTICE"
+    r"|ERROR|ERR|WARN(?:ING)?|INFO|DEBUG|TRACE|VERBOSE)\b\s*\]?\s*",
+    re.I,
+)
+
+
+def _clean_for_display(line: str) -> str:
+    """Strip timestamps, empty brackets, and leading severity keywords for compact display."""
+    result = line
+    for pattern in TIMESTAMP_PATTERNS:
+        result = pattern.sub("", result)
+    # Remove empty brackets left after timestamp removal (e.g. "[]" from "[Sun Dec 04...]")
+    result = re.sub(r"\[\s*\]", "", result)
+    # Remove leading severity word left over after timestamp removal
+    result = _SEVERITY_WORD_RE.sub("", result, count=1)
+    return result.strip()
 
 
 def _severity_rank(sev: Severity) -> int:

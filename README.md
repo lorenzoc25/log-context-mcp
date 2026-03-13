@@ -4,6 +4,10 @@
 
 An MCP server that sits between raw logs and the LLM context window. Instead of dumping thousands of log lines into the context (burning tokens on noise), the coding agent calls `log_ingest` and gets back a structured, deduplicated summary in ~500-2000 tokens. It can then drill down into specific patterns on demand.
 
+[![PyPI](https://img.shields.io/pypi/v/log-context-mcp)](https://pypi.org/project/log-context-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/log-context-mcp)](https://pypi.org/project/log-context-mcp/)
+[![Tests](https://github.com/lorenzoc25/log-context-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/lorenzoc25/log-context-mcp/actions/workflows/tests.yml)
+
 ## The Problem
 
 When debugging with AI coding agents (Claude Code, Cursor, Copilot), the current workflow is:
@@ -28,7 +32,7 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 ┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Raw Log     │────▶│  Layer 1:        │────▶│  Layer 2:       │
 │  (5000 lines)│     │  Deterministic   │     │  Semantic       │
-│              │     │  - Dedup         │     │  - Haiku LLM    │
+│              │     │  - Dedup         │     │  - Any LLM      │
 │              │     │  - Severity      │     │  - Classify     │
 │              │     │  - Stack traces  │     │  - Root cause   │
 │              │     │  - Noise removal │     │  - Timeline     │
@@ -55,12 +59,12 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 - Typically achieves 50-70% reduction alone
 
 **Layer 2 (Semantic, cheap):**
-- Calls Claude Haiku or Equivalent (~$0.001 per analysis)
-- Classifies ambiguous errors into categories
+- Works with any LLM backend: Anthropic, OpenAI, Gemini, Ollama, or any OpenAI-compatible API
+- Classifies errors into categories (timeout, auth_failure, connection_error, etc.)
 - Extracts root cause in 1-2 sentences
 - Builds timeline of state changes
 - Flags items needing human attention
-- Optional — server works without it
+- Optional — server works without it (deterministic-only mode)
 
 **Layer 3 (Drill-down, on demand):**
 - Agent requests specific lines by pattern, severity, or line number
@@ -69,55 +73,86 @@ cat error.log | claude    # 5000 lines → 15,000+ tokens of mostly noise
 
 ## Setup
 
-### Prerequisites
-
-- Python 3.11+
-- Claude Code installed
-
-### Install
+### Quick setup (recommended)
 
 ```bash
-cd log-context-mcp
+# 1. Install
+pip install log-context-mcp
 
-# Create and activate virtual environment (recommended)
-python3.11 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# For development (including tests)
-pip install -e ".[dev]"
+# 2. Run the interactive setup script
+curl -fsSL https://raw.githubusercontent.com/lorenzoc25/log-context-mcp/main/scripts/setup.sh | bash
 ```
 
-### Register with Claude Code
+The setup script walks you through choosing a backend and registers the MCP server with Claude Code automatically.
+
+### Manual setup
 
 ```bash
-claude mcp add log-context -- python /path/to/log-context-mcp/server.py
+# Install
+pip install log-context-mcp
+
+# Register with Claude Code (deterministic-only, no API key needed)
+claude mcp add log-context -- log-context-mcp
 ```
 
-### (Optional) Enable Semantic Analysis
+### Enable Semantic Analysis (Layer 2)
 
-Layer 2 (semantic analysis) supports multiple LLM backends with auto-detection:
+Pass your API key as an environment variable when registering. Layer 2 auto-detects the backend from env vars:
 
+Layer 2 uses `OPENAI_API_KEY` as the key variable for **any OpenAI-compatible provider** — not just OpenAI. Gemini, Groq, Together, and LM Studio all use the same variable; only the `OPENAI_BASE_URL` and model change.
+
+**Google Gemini / Gemma (free tier available)**
 ```bash
-# Option 1: Anthropic (Claude)
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Option 2: OpenAI or compatible provider (Groq, Together, etc.)
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, default shown
-
-# Option 3: Local Ollama
-# (auto-detected at http://localhost:11434 if running)
-ollama run llama3  # or any other model
-
-# Option 4: Explicit backend selection
-export LOG_CONTEXT_BACKEND=anthropic  # or openai, ollama
-export LOG_CONTEXT_MODEL=claude-opus-4-20250514  # override default model
+# Get a free key at: https://aistudio.google.com/apikey
+claude mcp add log-context \
+  -e OPENAI_API_KEY=<your-gemini-key> \
+  -e OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai \
+  -e LOG_CONTEXT_MODEL=gemma-3-27b-it \
+  -- log-context-mcp
 ```
 
-Without any API key, the server runs in deterministic-only mode (Layer 1 only), which is still very useful.
+**Anthropic (Claude Haiku)**
+```bash
+claude mcp add log-context \
+  -e ANTHROPIC_API_KEY=<your-key> \
+  -- log-context-mcp
+```
+
+**OpenAI**
+```bash
+claude mcp add log-context \
+  -e OPENAI_API_KEY=<your-openai-key> \
+  -- log-context-mcp
+```
+
+**Ollama (local, free)**
+```bash
+ollama pull llama3
+claude mcp add log-context \
+  -e LOG_CONTEXT_MODEL=llama3 \
+  -- log-context-mcp
+```
+
+**Groq, Together, LM Studio, or any OpenAI-compatible provider**
+```bash
+claude mcp add log-context \
+  -e OPENAI_API_KEY=<your-key> \
+  -e OPENAI_BASE_URL=<provider-base-url> \
+  -e LOG_CONTEXT_MODEL=<model-name> \
+  -- log-context-mcp
+```
+
+Without any API key, the server runs in deterministic-only mode (Layer 1), which still provides significant value.
+
+### Environment variable reference
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Use Anthropic backend | — |
+| `OPENAI_API_KEY` | API key for any OpenAI-compatible provider (OpenAI, Gemini, Groq, etc.) | — |
+| `OPENAI_BASE_URL` | Base URL for the OpenAI-compatible endpoint | `https://api.openai.com/v1` |
+| `LOG_CONTEXT_MODEL` | Override model name | Haiku / gpt-4o-mini / llama3 |
+| `LOG_CONTEXT_BACKEND` | Force backend: `anthropic`, `openai`, `ollama` | auto-detect |
 
 ### Project Structure
 
@@ -128,33 +163,21 @@ log-context-mcp/
 │   ├── server.py             # MCP server & tool definitions
 │   ├── preprocessor.py       # Layer 1: Deterministic processing
 │   └── analyzer.py           # Layer 2: Semantic analysis
-├── tests/                    # Test suite
-│   ├── __init__.py
-│   └── test_log_context.py  # Comprehensive test coverage
-├── pyproject.toml            # Project metadata & pytest config
-└── README.md                 # This file
+├── scripts/
+│   └── setup.sh              # Interactive setup script
+├── tests/
+│   └── test_log_context.py   # Test suite
+└── pyproject.toml
 ```
 
 ### Running Tests
 
 ```bash
-# Run all tests
-python3.11 -m pytest tests/
-
-# Run with verbose output
+pip install -e ".[dev]"
 python3.11 -m pytest tests/ -v
-
-# Run with coverage report
-python3.11 -m pytest tests/ --cov=log_context_mcp --cov-report=term-missing
 ```
 
-Tests cover:
-- **Layer 1 (deterministic)**: 35 tests covering ANSI stripping, severity detection, deduplication, stack traces, etc.
-- **Layer 2 (prompt generation)**: 4 tests for prompt structure and formatting
-- **Backend resolution**: 13 tests for auto-detection and explicit backend selection
-- **Backend implementations**: 4 tests for API request formatting
-
-All tests run **without external API keys** — mocked where needed.
+All tests run without external API keys.
 
 ## Usage
 
@@ -176,7 +199,7 @@ Parameters:
 - `file_path`: Path to log file (preferred for large logs)
 - `log_text`: Raw log text (for small snippets)
 - `label`: Session name for later reference (default: "default")
-- `enable_semantic`: Whether to run Haiku analysis (default: true)
+- `enable_semantic`: Whether to run semantic analysis (default: true)
 
 ### `log_get_lines` — Drill into specific lines
 
@@ -191,7 +214,7 @@ Parameters:
 - `around_line`: Show context around a specific line number
 - `context_lines`: How many lines of context (default: 5)
 
-### `log_get_analysis` — Get raw semantic analysis
+### `log_get_analysis` — Get raw semantic analysis JSON
 
 ```
 Show me the full semantic analysis JSON from log_get_analysis
@@ -203,55 +226,62 @@ Show me the full semantic analysis JSON from log_get_analysis
 What logs have I ingested? Use log_list_sessions
 ```
 
-## Example
+## Real-World Benchmark
 
-Given a 3000-line Node.js application log, the agent gets back:
+Tested against the [Apache 2k log](https://github.com/logpai/loghub/blob/master/Apache/Apache_2k.log) from the LogHub dataset:
+
+| Metric | Value |
+|---|---|
+| Input lines | 2,000 |
+| Unique lines after dedup | 70 |
+| **Reduction** | **96.5%** |
+| Errors identified | 595 |
+| Semantic root cause | mod_jk worker instability (Apache–Tomcat connector) |
+
+Layer 2 correctly identified the cyclic failure pattern: `workerEnv.init() ok` → immediately followed by `workerEnv in error state`, repeating across both days — pointing to a version mismatch or misconfiguration rather than transient failures.
+
+## Example Output
+
+Given a 3000-line application log:
 
 ```
 ## Log Preprocessing Summary
 - Total lines: 3,247
 - Unique lines: 142 (95.6% reduction)
-- Noise removed: 89
 - Time range: 2026-03-07T10:03:12 → 2026-03-07T10:07:45
 
 ### Severity Breakdown
 - ERROR: 16
 - WARNING: 3
 - INFO: 2,831
-- DEBUG: 308
 
 ### Stack Traces (2 found)
-**Trace 1** (line 1847):
+Trace 1 (line 1847):
   at DBClient.connect (src/db/client.ts:142)
-  at ConnectionPool.acquire (src/db/pool.ts:89)
   ... (12 frames omitted)
   Error: connect ECONNREFUSED 127.0.0.1:5432
 
 ### Semantic Analysis
 **Primary Issue**: Database connection failure causing cascading service degradation
 **Root Cause**: PostgreSQL on port 5432 is unreachable, likely down or misconfigured
-**Error Signatures**:
-- `ECONNREFUSED 127.0.0.1:5432` [connection_error] in db/client.ts (×14)
-- `TimeoutError: query timeout` [timeout] in api/handler.ts (×2)
 **Timeline**:
 - [10:03:12] First connection refused error
 - [10:03:15] Connection pool exhausted
-- [10:03:18] API handler timeout errors begin
 - [10:07:45] Last log entry (service likely crashed)
 ```
 
-That's ~400 tokens instead of ~12,000. The agent then calls `log_get_lines(pattern="ECONNREFUSED", max_lines=5)` for the specific raw lines it needs.
+That's ~400 tokens instead of ~12,000.
 
 ## Design Decisions
 
 **Why MCP and not a CLI tool?**
 MCP integrates directly into the agent's tool loop. The agent can decide when to drill down without the user manually piping things around.
 
-**Why Haiku for Layer 2?**
-It's ~50x cheaper than Opus/Sonnet. For log classification, you don't need deep reasoning — you need pattern recognition and categorization, which Haiku handles well.
+**Why support multiple LLM backends?**
+Different users have different API access. Gemini has a free tier; Anthropic is highest quality; Ollama is fully local. Layer 2 should work for everyone.
 
 **Why keep raw lines in memory?**
-The drill-down tool needs access to the original log. Storing in memory avoids re-reading from disk and keeps the server stateless from the filesystem perspective.
+The drill-down tool needs access to the original log. Storing in memory avoids re-reading from disk and keeps latency low.
 
 **Why not just use grep?**
 Grep finds lines but doesn't understand them. This tool tells the agent "there are 14 connection errors to port 5432 starting at 10:03, the root cause is the database being down" — that's semantic understanding, not string matching.

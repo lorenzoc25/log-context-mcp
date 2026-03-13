@@ -112,29 +112,36 @@ class _OpenAICompatibleBackend:  # pylint: disable=too-few-public-methods
 
     async def call(self, system_prompt: str, user_prompt: str) -> str:
         """Make a request to OpenAI-compatible API and return the text response."""
-        headers = {
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                },
-            )
+            response = await self._post(client, headers, system_prompt, user_prompt)
+            if response.status_code == 400:
+                # Some models (e.g. Gemma) don't support the system role —
+                # retry by merging system prompt into the user message.
+                response = await self._post(
+                    client, headers,
+                    system_prompt=None,
+                    user_prompt=f"{system_prompt}\n\n{user_prompt}",
+                )
             response.raise_for_status()
             data = response.json()
 
-        # Extract text from response
         return data["choices"][0]["message"]["content"]
+
+    async def _post(self, client, headers, system_prompt, user_prompt):
+        """Send a single chat completions request."""
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        return await client.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json={"model": self.model, "messages": messages},
+        )
 
 
 async def _resolve_backend() -> Optional[tuple]:  # pylint: disable=too-many-return-statements
@@ -303,18 +310,24 @@ async def analyze(
                  If provided, Anthropic backend is used directly.
     """
     if not HAS_HTTPX:
+        print("[log_context] httpx not installed, skipping semantic analysis",
+              file=sys.stderr)
         return None
 
     # If api_key is provided, use Anthropic backend directly (backward compatibility)
     if api_key:
         model = os.environ.get("LOG_CONTEXT_MODEL", "claude-haiku-4-5-20251001")
         backend = _AnthropicBackend(api_key, model)
+        print(f"[log_context] Using Anthropic backend, model={model}", file=sys.stderr)
     else:
         # Resolve backend from env vars
         backend_result = await _resolve_backend()
         if backend_result is None:
+            print("[log_context] No backend found (no API keys set)", file=sys.stderr)
             return None
-        backend, _model = backend_result
+        backend, resolved_model = backend_result
+        print(f"[log_context] Using {type(backend).__name__}, model={resolved_model}",
+              file=sys.stderr)
 
     prompt = _build_analysis_prompt(result)
 

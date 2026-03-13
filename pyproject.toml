@@ -7,7 +7,7 @@ name = "log-context-mcp"
 version = "0.1.0"
 description = "Token-efficient log preprocessing MCP server for LLM coding agents"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-log-context-mcp = "log_context_mcp.server:mcp.run"
+log-context-mcp = "log_context_mcp.server:main"
 
 [tool.setuptools]
 packages = ["log_context_mcp"]
